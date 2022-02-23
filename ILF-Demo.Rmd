@@ -1,0 +1,382 @@
+---
+title: "Increased Limit Factor Demo"
+author: "Edward Pearce"
+date: "18/02/2022"
+output: html_document
+---
+
+```{r, label='setup', include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.path = './figures/demo-', out.width = '100%')
+```
+
+## Background
+
+We suppose a [power law relation][Wikipedia - Power Law] between the **Sum Insured** $x$ and the **Premium** $y$ of an insurance quote. This relation takes the form $$y(x) = \alpha x^{\beta}$$ which may alternatively be expressed as a linear relationship between $\log(x)$ and $\log(y)$ of the form $$\log(y) = \log(\alpha) + \beta \log(x),$$ where $\alpha$ and $\beta$ are constants to be determined.
+
+It follows that for any constant multiplying factor $c$ we have $y(cx) = c^{\beta} y(x)$, and in particular $y(2x) = 2^{\beta} y(x) = (1 + \gamma) y(x)$ for any sum insured $x$, where we call the constant $\gamma = 2^{\beta} - 1$ the **Increased Limit Factor**. This means that in our power law model, doubling the sum insured results in multiplying the premium by a factor of $1 + \gamma$, regardless of the reference sum insured value we doubled.
+
+## Setup
+
+Import plotting libraries
+
+```{r, label='plotting-libs'}
+library(ggplot2)
+library(gridExtra)
+```
+
+Import utility functions
+
+```{r, label='load-utils'}
+# Can alternatively use the knitr 'file' chunk option to display the imported code
+source('./GenerateData.R')
+```
+
+## Dataset
+
+For demonstration purposes, we randomly generate a sample of $N$ quotes whose sums insured $X_{i}$ (in millions GBP) are i.i.d. from $\mathrm{Gamma}(k=2,\theta=2)$ and whose premiums $Y_{i}$ are distributed about the power law $\mu_{i} = \alpha x_{i}^{\beta}$ with [Gamma error distribution][Wikipedia - Gamma Distribution] $$(Y_{i} | X_{i}) \sim \mathrm{Gamma}(k = k_{0}, \theta = \mu_{i}/k_{0})$$ where $k_{0}$ is a constant determining the shape/dispersion of the Gamma family of error distributions.
+
+Therefore, the theoretical mean and mode for the $X_{i}$ are £4m and £2m respectively, and the expected and mode value for each $Y_{i}$ given $X_{i}$ will be $\mu_{i}$ and $\mu_{i} \cdot\frac{k_{0}-1}{k_{0}}$ respectively.
+
+```{r, label='generate-dataset'}
+# Set our power law parameters
+a <- 1.5
+b <- 0.5
+
+# Generate a dataset of N samples
+dataset <- generate_powerlaw_dataset(N = 10000, a = a, b = b, gamma_family_shape = 10, rseed = 42)
+
+# Calculate the means of the generated sums insured and premiums
+arithmetic_mean <- data.frame(t(colMeans(dataset)))
+geometric_mean <- data.frame(t(exp(colMeans(log(dataset)))))
+```
+
+```{r label='data-plot', echo=FALSE}
+ggplot(data=dataset) + 
+  geom_point(aes(x = SumInsured, y = Premium, colour = "sample data"), size = 2, alpha = 0.4) + 
+  geom_point(data = arithmetic_mean, aes(x = SumInsured, y = Premium, colour = "arithmetic mean"), size = 5) +
+  geom_point(data = geometric_mean, aes(x = SumInsured, y = Premium, colour = "geometric mean"), size = 5) +
+  geom_line(aes(x = SumInsured, y = meanPremium, colour = "true model"), size = 1) + 
+  labs(title = paste0("Premium curve y = ax^b", ", a = ", a, ", b = ", b),
+       subtitle = paste0("ILF = 2^b - 1 = ", exponent_to_ilf(b), "%",
+                         ", Avg Sum Insured = £", signif(arithmetic_mean$SumInsured / 1000000, 3), "M",
+                         ", Avg Premium = £", signif(arithmetic_mean$Premium / 1000, 3), "K")) + 
+  scale_x_continuous(name = "Sum Insured", labels = scales::comma) + 
+  scale_y_continuous(name = "Premium", labels = scales::comma) + 
+  scale_color_manual(name = "Legend", values = c("sample data" = "grey50",
+                                                 "arithmetic mean" = "red",
+                                                 "geometric mean" = "orange",
+                                                 "true model" = "black")) + 
+  theme_light() + 
+  theme(text = element_text(size = 12),
+        panel.grid.minor = element_blank())
+```
+
+## Modelling methods
+
+We compare two modelling methods for estimating the parameters $\alpha$ and $\beta$, and hence the **Increased Limit Factor** $\gamma$.
+
+1. Linear regression on log-transformed data
+2. Log-linked Gamma GLM
+
+We will also fit and plot a linear model (i.e. line of best fit) to the data for reference.
+
+### Linear regression on log-transformed data
+
+In this first model, we assume $\log(y_{i}) = \log(\alpha) + \beta \log(x_{i}) + \epsilon$ where $\epsilon \sim N(0,\sigma)$, or equivalently $\log(Y_{i}) \sim N(\log(\mu_{i}), \sigma)$, and apply **linear regression** on the log data to estimate $\log(\alpha)$ and $\beta$ and subsequently calculate $\alpha$ and the increased limit factor $\gamma = 2^{\beta} - 1$.
+
+This is known to lead to a [biased estimate][Power law: Estimating the exponent from empirical data] of the scaling component $\beta$. This is because generally $\mathbb{E}[\log(Y_{i})|X_{i}] \neq \log(\mathbb{E}[Y_{i}|X_{i}])$ and is related to a log-normal assumption on the error distribution.
+
+### Log-linked Gamma GLM
+
+In our case of estimating a power law, and more generally modelling continuous outcomes which are positively skewed and always taking positive values, adopting a [generalized linear model][Wikipedia - Generalized Linear Model] framework may provide better results due to using a [maximum likelihood method][Wikipedia - Maximum Likelihood Estimation] for model fitting. 
+
+We assume that $(Y_{i}|X_{i}) \sim \mathrm{Gamma}(k=k_{0},\theta=\mu_{i}/k_{0})$ for some constant shape/dispersion parameter $k_{0}$ where $\mathbb{E}[Y_{i}|X_{i}] = \mu_{i} = \alpha x_{i}^{\beta} = \exp(\log(\alpha) + \beta \log(x_{i}))$. These assumptions allow us to fit a Gamma distributed Generalized Linear Model to the data where the link function is $\exp^{-1} = \log$ and the linear relation is with $\log(X_{i})$ rather than $X_{i}$ directly. i.e. A proportional change in the independent variable $X_{i}$ leads to a proportional change in the dependent variable $Y_{i}$, though the respective proportions may differ.
+
+Further commentary comparing this method to the log-transform linear regression approach from the previous section is provided in the [References](#references).
+
+```{r, label='model-fit'}
+## Power law models
+# Fit a linear regression to the log transformed data
+m_log_lm <- lm(I(log(Premium)) ~ I(log(SumInsured)), data = dataset)
+
+# Fit a log-linked Gamma GLM to the data
+m_gamma_glm <- glm(Premium ~ I(log(SumInsured)), data = dataset, family = Gamma(link = "log"))
+
+## Straight line models
+# Fit a linear regression to the data
+m_lm <- lm(Premium ~ SumInsured, data = dataset)
+
+# Fit an identity-linked Gamma GLM to the data
+# m_gaussian_glm <- glm(Premium ~ SumInsured, data = dataset, family = Gamma(link = "identity"))
+```
+
+## Model summaries
+
+Having fitted the two model types, we now display the summary for each one. Note that the coefficients 'Intercept' and 'I(log(SumInsured))' correspond to $\log(\alpha)$ and $\beta$ in the power law $y = \alpha x^{\beta}$, respectively.
+
+```{r, label='log-lm-model-summary'}
+summary(m_log_lm)
+```
+
+Note that the dispersion parameter $\phi$ estimated by the Gamma GLM relates to the reciprocal $1/k_{0}$ of the shape $k_{0}$ we chose when generating the premium values $y_{i}$. See [StackExchange - Using R for GLM with Gamma distribution] for a discussion of relevant underlying assumptions when fitting Gamma GLMs in R with the standard glm() function.
+
+```{r, label='gamma-glm-model-summary'}
+summary(m_gamma_glm)
+```
+
+## Plotting the predicted model functions
+
+Use the fitted models to calculate predicted values for each of the datapoints.
+
+```{r, label='model-predict'}
+# Predict with the various models
+dataset$pred_log_lm <- exp(predict(m_log_lm, dataset))
+dataset$pred_gamma_glm <- predict(m_gamma_glm, dataset, type = "response")
+dataset$pred_lm <- predict(m_lm, dataset)
+# dataset$pred_gaussian_glm <- predict(m_gaussian_glm, dataset, type = "response")
+```
+
+### Linear scale plot
+
+First plot the predicted curves on a linear scale. Note that visually, the gamma glm follows the true curve most closely over the displayed domain, with the log-transformed linear model undershooting the true curve as the sum insured increases due to a slightly lower estimate for $\beta$.
+
+The simple linear model minimizes the mean squared error between the data points and predicted values, and passes through the centroid/arithmetic mean point by construction, making a reasonable approximation to the true curve over a limited range, but underfitting for particularly high or low sum insured values. Note that since this best-fit line does not pass through the origin, it does not satisfy the increased limit factor assumption. Enforcing such a requirement would restrict the problem to finding an optimal value for $\alpha$ (in this case, the gradient of the line $y = \alpha x$) and assume $\beta = 1$ and hence an increased limit factor of $\gamma = 1 = 100\%$.
+
+```{r label='linear-plot', echo=FALSE}
+lin_plot <- ggplot(data = dataset) + 
+              geom_point(aes(x = SumInsured, y = Premium, colour = "sample data"), size = 2, alpha = 0.4) + 
+              geom_point(data = arithmetic_mean, aes(x = SumInsured, y = Premium, colour = "arithmetic mean"), size = 5) +
+              geom_point(data = geometric_mean, aes(x = SumInsured, y = Premium, colour = "geometric mean"), size = 5) +
+              geom_line(aes(x = SumInsured, y = meanPremium, colour = "true model"), size = 1) + 
+              geom_line(aes(x = SumInsured, y = pred_lm, colour = "linear model"), size = 1) + 
+#             geom_line(aes(x = SumInsured, y = pred_gaussian_glm), color = "orange", size = 1) + 
+              geom_line(aes(x = SumInsured, y = pred_log_lm, colour = "log-transformed lm"), size = 1) + 
+              geom_line(aes(x = SumInsured, y = pred_gamma_glm, colour = "gamma glm"), size = 1) + 
+              labs(title = paste0("Premium curve y = ax^b", ", a = ", a, ", b = ", b),
+                   subtitle = paste0("ILF = 2^b - 1 = ", exponent_to_ilf(b), "%",
+                                     ", Avg Sum Insured = £", signif(arithmetic_mean$SumInsured / 1000000, 3), "M",
+                                     ", Avg Premium = £", signif(arithmetic_mean$Premium / 1000, 3), "K")) + 
+              scale_x_continuous(name = "Sum Insured", labels = scales::comma) + 
+              scale_y_continuous(name = "Premium", labels = scales::comma) + 
+              scale_color_manual(name = "Legend", 
+                                 values = c("sample data" = "grey50",
+                                            "arithmetic mean" = "red",
+                                            "geometric mean" = "orange",
+                                            "true model" = "black", 
+                                            "linear model" = "red",
+                                            "log-transformed lm" = "green",
+                                            "gamma glm" = "blue")
+                                 ) + 
+              theme_light() + 
+              theme(text = element_text(size = 12),
+                    panel.grid.minor = element_blank())
+lin_plot
+```
+
+### Log scale plot
+
+Secondly, we plot the model predictions on a log scale to emphasise the linear relation between the log data.
+Note that, by construction, the log-transformed linear model will pass through the geometric mean of the data $(\exp(\overline{\log(X)}), \exp(\overline{\log(Y)}))$.
+
+The Gamma GLM model will not necessarily pass through the arithmetic nor geometric mean point of the data, but will rather [estimate the parameters][Wikipedia - Maximum Likelihood Estimation] such that the likelihood of the observed data given our modelling assumptions (power law with Gamma distributed errors) is maximized.
+
+```{r label='log-plot', echo=FALSE}
+log_plot <- ggplot(data = dataset) + 
+              geom_point(aes(x = SumInsured, y = Premium, colour = "sample data"), size = 2, alpha = 0.4) + 
+              geom_point(data = arithmetic_mean, aes(x = SumInsured, y = Premium, colour = "arithmetic mean"), size = 5) +
+              geom_point(data = geometric_mean, aes(x = SumInsured, y = Premium, colour = "geometric mean"), size = 5) +
+              geom_line(aes(x = SumInsured, y = meanPremium, colour = "true model"), size = 1) + 
+              geom_line(aes(x = SumInsured, y = pred_lm, colour = "linear model"), size = 1) + 
+#             geom_line(aes(x = SumInsured, y = pred_gaussian_glm), color = "orange", size = 1) + 
+              geom_line(aes(x = SumInsured, y = pred_log_lm, colour = "log-transformed lm"), size = 1) + 
+              geom_line(aes(x = SumInsured, y = pred_gamma_glm, colour = "gamma glm"), size = 1) + 
+              labs(title = paste0("Premium curve log(y) = log(a) + b * log(x)", ", a = ", a, ", b = ", b),
+                   subtitle = paste0("ILF = 2^b - 1 = ", exponent_to_ilf(b), "%",
+                                     ", Avg Sum Insured = £", signif(arithmetic_mean$SumInsured / 1000000, 3), "M",
+                                     ", Avg Premium = £", signif(arithmetic_mean$Premium / 1000, 3), "K")) + 
+              # Log scale axes
+              scale_x_continuous(name = "Sum Insured (log scale)",
+                                 labels = scales::comma,
+                                 trans = "log10") + 
+              scale_y_continuous(name = "Premium (log scale)",
+                                 labels = scales::comma,
+                                 trans = "log10") + 
+              scale_color_manual(name = "Legend", 
+                                 values = c("sample data" = "grey50",
+                                            "arithmetic mean" = "red",
+                                            "geometric mean" = "orange",
+                                            "true model" = "black", 
+                                            "linear model" = "red",
+                                            "log-transformed lm" = "green",
+                                            "gamma glm" = "blue")
+              ) + 
+              annotation_logticks(short = unit(0.5, "cm"),
+                                  mid = unit(0.8, "cm"),
+                                  long = unit(1, "cm")) + 
+              theme_light() + 
+              theme(text = element_text(size = 12),
+                    panel.grid.minor = element_blank())
+log_plot
+```
+
+## Plotting coefficient estimates with confidence intervals
+
+We further compare the two modelling methods by plotting their estimated coefficients with confidence intervals against the parameters we used to generate the data.
+
+First we calculate the confidence intervals around the estimated coefficients.
+
+```{r, label='confidence-intervals', eval=FALSE, echo=FALSE, message=FALSE}
+m_log_lm_ci <- confint(m_log_lm)
+m_gamma_glm_ci <- confint(m_gamma_glm)
+```
+
+```{r, label='summarize-estimates-confints', message=FALSE}
+# Package coefficient estimates from a list of models into a dataframe format suitable for ggplot
+log_alpha_estimates <- summarize_estimates(list(m_log_lm, m_gamma_glm), c("log-trans lm", "gamma glm"), 1)
+beta_estimates <- summarize_estimates(list(m_log_lm, m_gamma_glm), c("log-trans lm", "gamma glm"), 2)
+
+# Apply transformations to the numeric fields (all but the first column) to obtain estimates for alpha and the ILF
+alpha_estimates <- data.frame(log_alpha_estimates)
+alpha_estimates[-1] <- exp(log_alpha_estimates[-1])
+
+ilf_estimates <- data.frame(beta_estimates)
+ilf_estimates[-1] <- exponent_to_ilf(beta_estimates[-1])
+```
+
+### Intercept estimate plots
+
+Plot the estimated values and confidence intervals for the log intercept $\log(\alpha)$ and exponentiate to obtain estimates for $\alpha$.
+
+```{r, label='intercept-estimate-plots-base-r', eval=FALSE, echo=FALSE}
+par(mfrow=c(1,2))
+# log_a_estimates_plot
+plot(1, 1, xlim = c(1,4), ylim = c(0.3, 0.7), type = "n",
+     xaxt = "n", xlab = "", ylab = "Estimate of log(a)")
+# Add line for true model value of a
+abline(h = log(a), col = "#00000050", lwd = 2, lty = 2)
+# Plot estimate and confidence interval for each model
+points(2, coef(m_log_lm)[1])
+segments(2, m_log_lm_ci[1, 1], 2, m_log_lm_ci[1, 2])
+points(3, coef(m_gamma_glm)[1])
+segments(3, m_gamma_glm_ci[1, 1], 3, m_gamma_glm_ci[1, 2])
+# Add axis labels
+axis(1, at = c(2, 3), labels = c("log-trans lm", "gamma glm"))
+
+# a_estimates_plot
+plot(1, 1, xlim = c(1,4), ylim = c(1, 2.7), type = "n",
+     xaxt = "n", xlab = "", ylab = "Estimate of a")
+# Add line for true model value of a
+abline(h = a, col = "#00000050", lwd = 2, lty = 2)
+# Plot estimate and confidence interval for each model
+points(2, exp(coef(m_log_lm)[1]))
+segments(2, exp(m_log_lm_ci[1, 1]), 2, exp(m_log_lm_ci[1, 2]))
+points(3, exp(coef(m_gamma_glm)[1]))
+segments(3, exp(m_gamma_glm_ci[1, 1]), 3, exp(m_gamma_glm_ci[1, 2]))
+# Add axis labels
+axis(1, at = c(2, 3), labels = c("log-trans lm", "gamma glm"))
+```
+
+```{r, label='intercept-estimate-plots'}
+log_alpha_est_plot <- plot_estimates(estimates_df = log_alpha_estimates, 
+                                title = "Estimates of log(a)", 
+                                true_value = log(a))
+alpha_est_plot <- plot_estimates(estimates_df = alpha_estimates, 
+                               title = "Estimates of a", 
+                               true_value = a)
+grid.arrange(log_alpha_est_plot, alpha_est_plot, nrow = 1)
+```
+
+### Exponent estimate plots
+
+Plot the estimated values and confidence intervals for the power law exponent $\beta$ and transform this into estimates for the increased limit factor $\gamma$ using the relation $\gamma = 2^{\beta} - 1$.
+
+```{r, label='exponent-estimate-plots-base-r', eval=FALSE, echo=FALSE}
+par(mfrow=c(1,2))
+# b_estimates_plot
+plot(1, 1, xlim = c(1,4), ylim = c(0.3, 0.7), type = "n",
+     xaxt = "n", xlab = "", ylab = "Estimate of b")
+# Add line for true model value of b
+abline(h = b, col = "#00000050", lwd = 2, lty = 2)
+# Plot estimate and confidence interval for each model
+points(2, coef(m_log_lm)[2])
+segments(2, m_log_lm_ci[2, 1], 2, m_log_lm_ci[2, 2])
+points(3, coef(m_gamma_glm)[2])
+segments(3, m_gamma_glm_ci[2, 1], 3, m_gamma_glm_ci[2, 2])
+# Add axis labels
+axis(1, at = c(2, 3), labels = c("log-trans lm", "gamma glm"))
+
+# ILF_estimates_plot
+plot(1, 1, xlim = c(1,4), ylim = c(39, 43), type = "n",
+     xaxt = "n", xlab = "", ylab = "Estimate of ILF %")
+# Add line for true model value of ILF %
+abline(h = exponent_to_ilf(b), col = "#00000050", lwd = 2, lty = 2)
+# Plot estimate and confidence interval for each model
+points(2, exponent_to_ilf(coef(m_log_lm)[2]))
+segments(2, exponent_to_ilf(m_log_lm_ci[2, 1]), 2, exponent_to_ilf(m_log_lm_ci[2, 2]))
+points(3, exponent_to_ilf(coef(m_gamma_glm)[2]))
+segments(3, exponent_to_ilf(m_gamma_glm_ci[2, 1]), 3, exponent_to_ilf(m_gamma_glm_ci[2, 2]))
+# Add axis labels
+axis(1, at = c(2, 3), labels = c("log-trans lm", "gamma glm"))
+```
+
+```{r, label='exponent-estimate-plots'}
+beta_est_plot <- plot_estimates(estimates_df = beta_estimates, 
+                                title = "Estimates of b", 
+                                true_value = b)
+ilf_est_plot <- plot_estimates(estimates_df = ilf_estimates, 
+                               title = "Estimates of ILF %", 
+                               true_value = exponent_to_ilf(b))
+grid.arrange(beta_est_plot, ilf_est_plot, nrow = 1)
+```
+
+## Conclusion
+
+When estimating the exponent of a supposed power law relation, using linear regression on the log-transformed data is a simple and easily interpreted method but may lead to a biased estimate due to the underlying modelling assumptions. 
+
+Adopting a generalized linear model framework allows greater flexibility around modelling assumptions without sacrificing interpretability and is also fairly straightforward to implement and analyse in R. 
+
+Furthermore, using [maximum likelihood estimation][Wikipedia - Maximum Likelihood Estimation] for model fitting provides better guarantees around consistency and efficiency of estimates (bounded and decreasing bias as sample size increases), as well as functional equivariance, which is relevant when transforming between maximum likelihood estimators of $\log(\alpha)$ and $\alpha$ and between $\beta$ and ILF $\gamma$.
+
+## Future directions
+
+In order to further compare the robustness of these different modelling methods, and examine the consistency and efficiency properties of maximum likelihood estimation, we might like to adopt the machine learning paradigm of splitting a dataset into training and test sets to better understand generalizability to out-of-sample data.
+
+In the case of this regression problem, an appropriate metric to use will be the mean squared error. It is the separating off of the test set that penalizes models which overfit to the training data.
+
+## References
+
+- [Power Law][Wikipedia - Power Law]
+  - [Power law: Estimating the exponent from empirical data]
+  - [Power-law Distributions in Empirical Data]
+  - [arXiv - Parameter estimation for power-law distributions by maximum likelihood methods]
+  - [arXiv - Power-law distributions in empirical data]
+- [Gamma Distribution][Wikipedia - Gamma Distribution] and [Generalized Linear Models][Wikipedia - Generalized Linear Model]
+  - [Wikipedia - Maximum Likelihood Estimation]
+  - [Modeling skewed continuous outcome using Gamma family in glm()]
+  - [Fitting Gamma GLMs Multiple Ways - Understanding GLMs through simulation]
+  - [Lecture on Gamma Regression]
+  - [StackExchange - Using R for GLM with Gamma distribution]
+  - [StackExchange - Log-linked Gamma GLM vs log-transformed LM]
+- Tools
+  - [R Markdown Cheat Sheet]
+  - [Knitr Documentation]
+  - [Laying out multiple plots on a page with the gridExtra package in R]
+  - [Rotating axis labels in base R]
+
+[Wikipedia - Power Law]: https://en.wikipedia.org/wiki/Power_law
+[Power law: Estimating the exponent from empirical data]: https://en.wikipedia.org/wiki/Power_law#Estimating_the_exponent_from_empirical_data
+[Power-law Distributions in Empirical Data]: https://aaronclauset.github.io/powerlaws/
+[arXiv - Parameter estimation for power-law distributions by maximum likelihood methods]: https://arxiv.org/abs/0704.1867
+[arXiv - Power-law distributions in empirical data]: https://arxiv.org/abs/0706.1062
+[Wikipedia - Generalized Linear Model]: https://en.wikipedia.org/wiki/Generalized_linear_model
+[Wikipedia - Gamma Distribution]: http://en.wikipedia.org/wiki/Gamma_distribution
+[Wikipedia - Maximum Likelihood Estimation]: https://en.wikipedia.org/wiki/Maximum_likelihood_estimation
+[Modeling skewed continuous outcome using Gamma family in glm()]: https://rpubs.com/kaz_yos/glm-Gamma
+[Fitting Gamma GLMs Multiple Ways - Understanding GLMs through simulation]: https://seananderson.ca/2014/04/08/gamma-glms/
+[Lecture on Gamma Regression]: https://www.groups.ma.tum.de/fileadmin/w00ccg/statistics/czado/lec8.pdf
+[StackExchange - Using R for GLM with Gamma distribution]: https://stats.stackexchange.com/questions/58497/using-r-for-glm-with-gamma-distribution
+[StackExchange - Log-linked Gamma GLM vs log-transformed LM]: https://stats.stackexchange.com/questions/77579/log-linked-gamma-glm-vs-log-linked-gaussian-glm-vs-log-transformed-lm
+[R Markdown Cheat Sheet]: https://www.rstudio.com/wp-content/uploads/2015/02/rmarkdown-cheatsheet.pdf
+[Knitr Documentation]: https://yihui.org/knitr/
+[Laying out multiple plots on a page with the gridExtra package in R]: https://cran.r-project.org/web/packages/egg/vignettes/Ecosystem.html
+[Rotating axis labels in base R]: https://www.tenderisthebyte.com/blog/2019/04/25/rotating-axis-labels-in-r/
