@@ -6,7 +6,8 @@ output: html_document
 ---
 
 ```{r, label='setup', include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, fig.path = './figures/demo-', out.width = '100%')
+knitr::opts_knit$set(base.url = 'https://raw.githubusercontent.com/edwardmpearce/ILF-modelling/main/')
+knitr::opts_chunk$set(fig.path = 'figures/demo-', out.width = '100%')
 ```
 
 ## Background
