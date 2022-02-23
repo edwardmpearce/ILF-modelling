@@ -8,6 +8,8 @@ It follows that for any constant multiplying factor $c$ we have $y(cx) = c^{\bet
 
 In the demonstration notebook, we randomly generate a sample of quotes (pairs of sum insured and premium values), estimate the power law parameters using both a log-transformed linear regression model and a [Gamma distributed][Wikipedia - Gamma Distribution] [Generalized Linear Model][Wikipedia - Generalized Linear Model], then plot the results for comparison. We also discuss differences between the two approaches from the viewpoint of statistical theory.
 
+![Demo Data Plot](https://raw.githubusercontent.com/edwardmpearce/ILF-modelling/main/figures/demo-data-plot-1.png)
+
 ## References
 
 - [Power Law][Wikipedia - Power Law]
